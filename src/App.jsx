@@ -8,7 +8,7 @@ import {
   Wallet, TrendingUp, TrendingDown, CalendarDays, Plus, Search,
   LogOut, ShieldCheck, Download, Pencil, RotateCcw, Smartphone,
   Loader2, Database, AlertTriangle, Trash2, LayoutDashboard, ListChecks,
-  PiggyBank, ReceiptText, SlidersHorizontal, Save, CheckCircle2
+  PiggyBank, ReceiptText, SlidersHorizontal, Save, CheckCircle2, Tags, FolderPlus
 } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 
@@ -16,7 +16,6 @@ const RAW_ROWS = [["2026-04-29", 0, "", 0, "", 0, "", 0, "", 7400, 7400], ["2026
 
 const INCOME_CATEGORIES = ['Зарплата', 'Проекты', 'Возврат долга', 'Подарки', 'Прочее'];
 const EXPENSE_CATEGORIES = ['Еда и быт', 'Авто', 'Долги и кредиты', 'Квартира', 'Развлечения', 'Одежда и красота', 'Налоги', 'Подарки', 'Прочее'];
-const ALL_CATEGORIES = Array.from(new Set([...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES]));
 const COLORS = ['#0f172a', '#6366f1', '#10b981', '#f43f5e', '#f59e0b', '#06b6d4', '#a855f7', '#14b8a6', '#fb7185'];
 const DEFAULT_EXPENSE_BUDGETS = {
   'Еда и быт': 30000,
@@ -29,6 +28,11 @@ const DEFAULT_EXPENSE_BUDGETS = {
   'Подарки': 8000,
   'Прочее': 10000,
 };
+
+const DEFAULT_CATEGORY_ROWS = [
+  ...INCOME_CATEGORIES.map((name, index) => ({ name, type: 'income', is_default: true, sort_order: (index + 1) * 10 })),
+  ...EXPENSE_CATEGORIES.map((name, index) => ({ name, type: 'expense', is_default: true, sort_order: (index + 1) * 10 })),
+];
 
 const money = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const rub = (v) => `${money.format(Math.round(Number(v || 0)))} ₽`;
@@ -101,6 +105,22 @@ const toSeedTransactions = (userId) => RAW_ROWS.flatMap((r) => {
     });
   }
   return items;
+});
+
+const toSeedCategories = (userId) => DEFAULT_CATEGORY_ROWS.map((category) => ({
+  user_id: userId,
+  name: category.name,
+  type: category.type,
+  is_default: category.is_default,
+  sort_order: category.sort_order,
+}));
+
+const toUiCategory = (r) => ({
+  id: r.id,
+  name: r.name,
+  type: r.type,
+  isDefault: Boolean(r.is_default),
+  sortOrder: Number(r.sort_order || 0),
 });
 
 const toUiDay = (r) => ({
@@ -240,6 +260,7 @@ export default function App() {
   const [days, setDays] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [settings, setSettings] = useState(null);
   const [view, setView] = useState('dashboard');
   const [month, setMonth] = useState('all');
@@ -251,6 +272,8 @@ export default function App() {
   const [editingTx, setEditingTx] = useState(null);
   const [budgetMonth, setBudgetMonth] = useState('2026-05');
   const [budgetDraft, setBudgetDraft] = useState({ ...DEFAULT_EXPENSE_BUDGETS });
+  const [newCategory, setNewCategory] = useState({ type: 'expense', name: '' });
+  const [editingCategory, setEditingCategory] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -269,6 +292,14 @@ export default function App() {
 
   const rows = useMemo(() => buildRows(days, transactions, settings?.start_balance_fact || 0), [days, transactions, settings]);
   const months = useMemo(() => Array.from(new Set(rows.map((r) => monthKey(r.date)))).sort(), [rows]);
+  const incomeCategoryNames = useMemo(() => {
+    const list = categories.filter((c) => c.type === 'income').sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((c) => c.name);
+    return list.length ? list : INCOME_CATEGORIES;
+  }, [categories]);
+  const expenseCategoryNames = useMemo(() => {
+    const list = categories.filter((c) => c.type === 'expense').sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((c) => c.name);
+    return list.length ? list : EXPENSE_CATEGORIES;
+  }, [categories]);
   const selectedMonth = month === 'all' ? months[0] || budgetMonth : month;
 
   useEffect(() => {
@@ -276,33 +307,39 @@ export default function App() {
   }, [months.join('|')]);
 
   useEffect(() => {
-    const next = { ...DEFAULT_EXPENSE_BUDGETS };
+    const next = {};
+    expenseCategoryNames.forEach((category) => {
+      next[category] = DEFAULT_EXPENSE_BUDGETS[category] ?? 0;
+    });
     budgets.filter((b) => b.month_start?.slice(0, 7) === budgetMonth).forEach((b) => {
       next[b.category] = Number(b.limit_amount || 0);
     });
     setBudgetDraft(next);
-  }, [budgets, budgetMonth]);
+  }, [budgets, budgetMonth, expenseCategoryNames.join('|')]);
 
   async function loadData() {
     setLoading(true);
     setError('');
     try {
-      const [settingsResult, daysResult, transactionsResult, budgetsResult] = await Promise.all([
+      const [settingsResult, daysResult, transactionsResult, budgetsResult, categoriesResult] = await Promise.all([
         supabase.from('finance_settings').select('*').maybeSingle(),
         supabase.from('finance_days').select('*').order('day', { ascending: true }),
         supabase.from('finance_transactions').select('*').order('day', { ascending: false }).order('created_at', { ascending: false }),
         supabase.from('finance_budgets').select('*').order('month_start', { ascending: true }),
+        supabase.from('finance_categories').select('*').order('type', { ascending: true }).order('sort_order', { ascending: true }).order('name', { ascending: true }),
       ]);
       if (settingsResult.error) throw settingsResult.error;
       if (daysResult.error) throw daysResult.error;
       if (transactionsResult.error) throw transactionsResult.error;
       if (budgetsResult.error) throw budgetsResult.error;
+      if (categoriesResult.error) throw categoriesResult.error;
 
       const loadedSettings = settingsResult.data || { start_balance_fact: 0, title: 'Финансовый план' };
       setSettings(loadedSettings);
       setDays((daysResult.data || []).map(toUiDay));
       setTransactions((transactionsResult.data || []).map(toUiTransaction));
       setBudgets(budgetsResult.data || []);
+      setCategories((categoriesResult.data || []).map(toUiCategory));
     } catch (err) {
       setError(err.message || 'Не удалось загрузить данные');
     } finally {
@@ -325,6 +362,9 @@ export default function App() {
 
       const { error: daysError } = await supabase.from('finance_days').upsert(toSeedDays(session.user.id), { onConflict: 'user_id,day' });
       if (daysError) throw daysError;
+
+      const { error: categoriesError } = await supabase.from('finance_categories').upsert(toSeedCategories(session.user.id), { onConflict: 'user_id,type,name' });
+      if (categoriesError) throw categoriesError;
 
       const seedTx = toSeedTransactions(session.user.id);
       if (seedTx.length) {
@@ -424,7 +464,7 @@ export default function App() {
     setLoading(true);
     setError('');
     try {
-      const rowsToUpsert = EXPENSE_CATEGORIES.map((category) => ({
+      const rowsToUpsert = expenseCategoryNames.map((category) => ({
         user_id: session.user.id,
         month_start: monthStart(budgetMonth),
         category,
@@ -441,6 +481,92 @@ export default function App() {
     }
   }
 
+
+  async function addCategory(e) {
+    e.preventDefault();
+    const name = newCategory.name.trim();
+    if (!session?.user || !name) return;
+    setLoading(true);
+    setError('');
+    try {
+      const sameType = categories.filter((c) => c.type === newCategory.type);
+      const sortOrder = sameType.length ? Math.max(...sameType.map((c) => c.sortOrder || 0)) + 10 : 10;
+      const { error: insertError } = await supabase.from('finance_categories').insert({
+        user_id: session.user.id,
+        type: newCategory.type,
+        name,
+        is_default: false,
+        sort_order: sortOrder,
+      });
+      if (insertError) throw insertError;
+      setNewCategory((p) => ({ ...p, name: '' }));
+      setSuccess('Категория добавлена');
+      await loadData();
+    } catch (err) {
+      setError(err.message || 'Не удалось добавить категорию');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveCategory() {
+    if (!session?.user || !editingCategory) return;
+    const nextName = editingCategory.name.trim();
+    if (!nextName) return;
+    setLoading(true);
+    setError('');
+    try {
+      const { error: categoryError } = await supabase.from('finance_categories').update({
+        name: nextName,
+      }).eq('id', editingCategory.id);
+      if (categoryError) throw categoryError;
+
+      if (editingCategory.originalName && editingCategory.originalName !== nextName) {
+        const { error: txError } = await supabase.from('finance_transactions')
+          .update({ category: nextName })
+          .eq('type', editingCategory.type)
+          .eq('category', editingCategory.originalName);
+        if (txError) throw txError;
+
+        if (editingCategory.type === 'expense') {
+          const { error: budgetError } = await supabase.from('finance_budgets')
+            .update({ category: nextName })
+            .eq('category', editingCategory.originalName);
+          if (budgetError) throw budgetError;
+        }
+      }
+
+      setEditingCategory(null);
+      setSuccess('Категория обновлена');
+      await loadData();
+    } catch (err) {
+      setError(err.message || 'Не удалось сохранить категорию');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteCategory(category) {
+    if (!session?.user) return;
+    const list = category.type === 'income' ? incomeCategoryNames : expenseCategoryNames;
+    if (list.length <= 1) {
+      setError('Нельзя удалить последнюю категорию этого типа');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const { error: deleteError } = await supabase.from('finance_categories').delete().eq('id', category.id);
+      if (deleteError) throw deleteError;
+      setSuccess('Категория удалена из справочника');
+      await loadData();
+    } catch (err) {
+      setError(err.message || 'Не удалось удалить категорию');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function resetData() {
     if (!session?.user) return;
     setLoading(true);
@@ -449,6 +575,7 @@ export default function App() {
       await supabase.from('finance_transactions').delete().eq('user_id', session.user.id);
       await supabase.from('finance_days').delete().eq('user_id', session.user.id);
       await supabase.from('finance_budgets').delete().eq('user_id', session.user.id);
+      await supabase.from('finance_categories').delete().eq('user_id', session.user.id);
       setLoading(false);
       await seedData();
     } catch (err) {
@@ -458,7 +585,7 @@ export default function App() {
   }
 
   function downloadData() {
-    const payload = { days, transactions, budgets, settings };
+    const payload = { days, transactions, budgets, categories, settings };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -525,20 +652,20 @@ export default function App() {
 
   const budgetRows = useMemo(() => {
     const monthTransactions = transactions.filter((tx) => tx.type === 'expense' && monthKey(tx.date) === budgetMonth);
-    return EXPENSE_CATEGORIES.map((category) => {
+    return expenseCategoryNames.map((category) => {
       const spent = monthTransactions.filter((tx) => tx.category === category).reduce((s, tx) => s + tx.amount, 0);
       const limit = normalizeAmount(budgetDraft[category]);
       const percent = limit > 0 ? Math.min(999, Math.round((spent / limit) * 100)) : 0;
       return { category, spent, limit, percent, left: limit - spent };
     });
-  }, [transactions, budgetMonth, budgetDraft]);
+  }, [transactions, budgetMonth, budgetDraft, expenseCategoryNames.join('|')]);
 
-  const selectedCategories = entry.type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  const selectedCategories = entry.type === 'income' ? incomeCategoryNames : expenseCategoryNames;
 
   useEffect(() => {
-    const valid = entry.type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
-    if (!valid.includes(entry.category)) setEntry((p) => ({ ...p, category: valid[0] }));
-  }, [entry.type]);
+    const valid = entry.type === 'income' ? incomeCategoryNames : expenseCategoryNames;
+    if (!valid.includes(entry.category)) setEntry((p) => ({ ...p, category: valid[0] || 'Прочее' }));
+  }, [entry.type, incomeCategoryNames.join('|'), expenseCategoryNames.join('|')]);
 
   if (!authReady) return <div className="center-screen"><Loader2 className="spin" /> Загрузка...</div>;
   if (!session) return <AuthScreen />;
@@ -577,6 +704,7 @@ export default function App() {
               <NavButton active={view === 'quick'} icon={Smartphone} onClick={() => setView('quick')}>Быстрый ввод</NavButton>
               <NavButton active={view === 'history'} icon={ReceiptText} onClick={() => setView('history')}>Операции</NavButton>
               <NavButton active={view === 'budget'} icon={PiggyBank} onClick={() => setView('budget')}>Бюджет</NavButton>
+              <NavButton active={view === 'categories'} icon={Tags} onClick={() => setView('categories')}>Категории</NavButton>
               <NavButton active={view === 'plan'} icon={ListChecks} onClick={() => setView('plan')}>План/факт</NavButton>
             </nav>
 
@@ -639,6 +767,10 @@ export default function App() {
               <BudgetSection budgetMonth={budgetMonth} setBudgetMonth={setBudgetMonth} months={months} budgetRows={budgetRows} budgetDraft={budgetDraft} setBudgetDraft={setBudgetDraft} saveBudgets={saveBudgets} loading={loading} />
             ) : null}
 
+            {view === 'categories' ? (
+              <CategorySection categories={categories} newCategory={newCategory} setNewCategory={setNewCategory} addCategory={addCategory} onEdit={(category) => setEditingCategory({ ...category, originalName: category.name })} onDelete={deleteCategory} />
+            ) : null}
+
             {view === 'plan' ? (
               <PlanFactTable filteredRows={filteredRows} month={month} setMonth={setMonth} months={months} query={query} setQuery={setQuery} onlyActive={onlyActive} setOnlyActive={setOnlyActive} />
             ) : null}
@@ -647,7 +779,11 @@ export default function App() {
       </main>
 
       {editingTx ? (
-        <TransactionModal tx={editingTx} setTx={setEditingTx} save={saveTransaction} />
+        <TransactionModal tx={editingTx} setTx={setEditingTx} save={saveTransaction} incomeCategories={incomeCategoryNames} expenseCategories={expenseCategoryNames} />
+      ) : null}
+
+      {editingCategory ? (
+        <CategoryModal category={editingCategory} setCategory={setEditingCategory} save={saveCategory} />
       ) : null}
     </div>
   );
@@ -731,6 +867,50 @@ function BudgetSection({ budgetMonth, setBudgetMonth, months, budgetRows, budget
   );
 }
 
+
+function CategorySection({ categories, newCategory, setNewCategory, addCategory, onEdit, onDelete }) {
+  const income = categories.filter((c) => c.type === 'income').sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+  const expense = categories.filter((c) => c.type === 'expense').sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+  return (
+    <section className="category-layout">
+      <div className="card category-form-card">
+        <div className="card-head"><div><h2>Справочник категорий</h2><p>Добавляй свои категории для быстрого ввода, истории операций и бюджетов</p></div><Tags size={24} /></div>
+        <form className="category-add-form" onSubmit={addCategory}>
+          <label>Тип категории</label>
+          <select value={newCategory.type} onChange={(e) => setNewCategory({ ...newCategory, type: e.target.value })}>
+            <option value="expense">Расход</option>
+            <option value="income">Приход</option>
+          </select>
+          <label>Название</label>
+          <input value={newCategory.name} onChange={(e) => setNewCategory({ ...newCategory, name: e.target.value })} placeholder="Например, Кафе / Здоровье / Подработки" />
+          <button className="dark-btn"><FolderPlus size={16} /> Добавить категорию</button>
+        </form>
+        <p className="category-note">Если переименовать категорию, приложение обновит старые операции и бюджеты с этим названием. Если удалить — старые операции сохранятся, но категория пропадёт из выпадающих списков.</p>
+      </div>
+
+      <div className="card">
+        <h2>Категории расходов</h2><p>Используются в быстром вводе, графике структуры расходов и бюджете</p>
+        <div className="category-list">{expense.map((category) => <CategoryItem key={category.id} category={category} onEdit={onEdit} onDelete={onDelete} />)}</div>
+      </div>
+
+      <div className="card">
+        <h2>Категории приходов</h2><p>Используются для зарплаты, проектов, возвратов и других поступлений</p>
+        <div className="category-list">{income.map((category) => <CategoryItem key={category.id} category={category} onEdit={onEdit} onDelete={onDelete} />)}</div>
+      </div>
+    </section>
+  );
+}
+
+function CategoryItem({ category, onEdit, onDelete }) {
+  return (
+    <div className="category-item">
+      <div className={category.type === 'income' ? 'category-dot income' : 'category-dot expense'} />
+      <div className="category-main"><b>{category.name}</b><span>{category.type === 'income' ? 'Приход' : 'Расход'}{category.isDefault ? ' · базовая' : ''}</span></div>
+      <div className="operation-actions"><button onClick={() => onEdit(category)}><Pencil size={15} /></button><button onClick={() => onDelete(category)}><Trash2 size={15} /></button></div>
+    </div>
+  );
+}
+
 function PlanFactTable({ filteredRows, month, setMonth, months, query, setQuery, onlyActive, setOnlyActive }) {
   return (
     <section className="card table-card">
@@ -743,15 +923,31 @@ function PlanFactTable({ filteredRows, month, setMonth, months, query, setQuery,
   );
 }
 
-function TransactionModal({ tx, setTx, save }) {
-  const cats = tx.type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+
+function CategoryModal({ category, setCategory, save }) {
+  return (
+    <div className="modal-backdrop">
+      <div className="modal">
+        <div className="card-head"><div><h2>Редактировать категорию</h2><p>{category.originalName}</p></div><button className="secondary-btn" onClick={() => setCategory(null)}>Закрыть</button></div>
+        <div className="modal-grid">
+          <label>Тип<input value={category.type === 'income' ? 'Приход' : 'Расход'} disabled /></label>
+          <label>Название<input value={category.name} onChange={(e) => setCategory({ ...category, name: e.target.value })} /></label>
+        </div>
+        <button className="primary-btn" onClick={save}>Сохранить категорию</button>
+      </div>
+    </div>
+  );
+}
+
+function TransactionModal({ tx, setTx, save, incomeCategories, expenseCategories }) {
+  const cats = tx.type === 'income' ? incomeCategories : expenseCategories;
   return (
     <div className="modal-backdrop">
       <div className="modal">
         <div className="card-head"><div><h2>Редактировать операцию</h2><p>{fullDate(tx.date)}</p></div><button className="secondary-btn" onClick={() => setTx(null)}>Закрыть</button></div>
         <div className="modal-grid">
           <label>Дата<input type="date" value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} /></label>
-          <label>Тип<select value={tx.type} onChange={(e) => setTx({ ...tx, type: e.target.value, category: e.target.value === 'income' ? INCOME_CATEGORIES[0] : EXPENSE_CATEGORIES[0] })}><option value="income">Приход</option><option value="expense">Расход</option></select></label>
+          <label>Тип<select value={tx.type} onChange={(e) => setTx({ ...tx, type: e.target.value, category: e.target.value === 'income' ? incomeCategories[0] : expenseCategories[0] })}><option value="income">Приход</option><option value="expense">Расход</option></select></label>
           <label>Категория<select value={tx.category} onChange={(e) => setTx({ ...tx, category: e.target.value })}>{cats.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
           <label>Сумма<input inputMode="decimal" value={tx.amount} onChange={(e) => setTx({ ...tx, amount: e.target.value })} /></label>
           <label className="wide-label">Комментарий<textarea value={tx.comment} onChange={(e) => setTx({ ...tx, comment: e.target.value })} /></label>
