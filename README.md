@@ -1,80 +1,59 @@
-# Финансовый дашборд: React + Supabase + Vercel
+# FinPlan — React + Supabase + Vercel
 
-Это стартовый проект онлайн-дашборда на основе Excel-файла "Финансовый план до Августа.xlsx".
+Личный онлайн-дашборд финансового плана.
 
-## Что внутри
+## Что есть в версии v2
 
-- React + Vite
-- Supabase Auth
-- Supabase Postgres
-- Row Level Security
-- Recharts для графиков
-- Современный адаптивный интерфейс
-- Быстрый ввод фактических операций
-- Редактирование факта
-- Импорт стартовых данных из Excel, зашитый в приложение
+- вход/регистрация через Supabase Auth;
+- план/факт по дням;
+- история операций отдельными записями;
+- категории приходов и расходов;
+- быстрый мобильный ввод;
+- редактирование и удаление операций;
+- ежемесячные бюджеты по категориям;
+- графики: остаток, месячная сводка, структура расходов;
+- PWA-режим: сайт можно добавить на главный экран телефона;
+- данные хранятся в Supabase и доступны с любого устройства.
 
-## 1. Создай Supabase проект
-
-1. Перейди в Supabase.
-2. Создай новый проект.
-3. Открой SQL Editor.
-4. Выполни файл `supabase/schema.sql`.
-
-## 2. Возьми ключи Supabase
-
-В Supabase:
-Project Settings -> API
-
-Нужны:
-- Project URL
-- anon public key
-
-## 3. Запусти локально
+## Локальный запуск
 
 ```bash
 npm install
-cp .env.example .env
-```
-
-Заполни `.env`:
-
-```bash
-VITE_SUPABASE_URL=https://your-project-id.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-public-key
-```
-
-Запуск:
-
-```bash
 npm run dev
 ```
 
-Открой адрес из консоли, обычно:
+Файл `.env` должен содержать:
 
-```bash
-http://localhost:5173
+```env
+VITE_SUPABASE_URL=https://your-project-id.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_your_key
 ```
 
-## 4. Первый вход
+## Обновление базы до v2
 
-1. Нажми "Зарегистрироваться".
-2. Создай аккаунт.
-3. Если в Supabase включено подтверждение email — подтверди почту.
-4. Войди.
-5. Нажми "Загрузить стартовые данные".
+Если у тебя уже была первая версия, сначала выполни SQL:
 
-## 5. Деплой на Vercel
+```text
+supabase/migration_v2_transactions_budgets.sql
+```
 
-1. Загрузи проект в GitHub.
-2. В Vercel выбери "Add New Project".
-3. Импортируй репозиторий.
-4. Добавь Environment Variables:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-5. Нажми Deploy.
+Открой Supabase → SQL Editor → New query → вставь содержимое файла → Run.
 
-## Важное
+Миграция создаст таблицы:
 
-`anon public key` можно использовать во фронтенде, потому что доступ к данным защищается RLS-политиками в базе.
-Не добавляй `service_role key` во фронтенд или в Vercel-переменные для клиентского приложения.
+- `finance_transactions` — история операций;
+- `finance_budgets` — месячные лимиты по категориям.
+
+Также она перенесёт старые фактические значения из `finance_days` в историю операций. Повторный запуск безопасен: дубли не создаются.
+
+## Деплой
+
+После проверки локально:
+
+```bash
+git add .
+git commit -m "feat: add operations budgets and pwa"
+git push
+```
+
+Vercel автоматически пересоберёт проект из GitHub.
